@@ -714,13 +714,13 @@ def train(gpu, opt, output_dir, noises_init):
                 
                 
                 # Use SUV class as test
-                desc = torch.zeros([opt.bs,10]).cuda()
-                desc[:,1] = 1
+                desc_1 = torch.zeros([1,10]).cuda()
+                desc_1[:,1] = 1
                 desc_25 = torch.zeros([25,10]).cuda()
                 desc_25[:,1] = 1
 
                 x_gen_eval = model.gen_samples(new_x_chain(x, 25).shape, x.device, desc_25, clip_denoised=False)
-                x_gen_list = model.gen_sample_traj(new_x_chain(x, 1).shape, x.device, desc, freq=40, clip_denoised=False)
+                x_gen_list = model.gen_sample_traj(new_x_chain(x, 1).shape, x.device, desc_1, freq=40, clip_denoised=False)
                 x_gen_all = torch.cat(x_gen_list, dim=0)
 
                 gen_stats = [x_gen_eval.mean(), x_gen_eval.std()]
