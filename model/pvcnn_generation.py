@@ -71,9 +71,9 @@ def create_pointnet_components(blocks, in_channels, embed_dim, with_se=False, no
 
 def create_pointnet2_sa_components(sa_blocks, extra_feature_channels, embed_dim=64, use_att=False,
                                    dropout=0.1, with_se=False, normalize=True, eps=0,
-                                   width_multiplier=1, voxel_resolution_multiplier=1):
+                                   width_multiplier=1, voxel_resolution_multiplier=1, text_embedding_channels=0):
     r, vr = width_multiplier, voxel_resolution_multiplier
-    in_channels = extra_feature_channels + 3
+    in_channels = extra_feature_channels + text_embedding_channels + 3
 
     sa_layers, sa_in_channels = [], []
     c = 0
@@ -172,7 +172,7 @@ def create_pointnet2_fp_modules(fp_blocks, in_channels, sa_in_channels, embed_di
 class PVCNN2Base(nn.Module):
 
     def __init__(self, num_classes, embed_dim, use_att, dropout=0.1,
-                 extra_feature_channels=3, width_multiplier=1, voxel_resolution_multiplier=1):
+                 extra_feature_channels=3, width_multiplier=1, voxel_resolution_multiplier=1, text_embedding_channels=0):
         super().__init__()
         assert extra_feature_channels >= 0
         self.embed_dim = embed_dim
@@ -181,7 +181,7 @@ class PVCNN2Base(nn.Module):
         sa_layers, sa_in_channels, channels_sa_features, _ = create_pointnet2_sa_components(
             sa_blocks=self.sa_blocks, extra_feature_channels=extra_feature_channels, with_se=True, embed_dim=embed_dim,
             use_att=use_att, dropout=dropout,
-            width_multiplier=width_multiplier, voxel_resolution_multiplier=voxel_resolution_multiplier
+            width_multiplier=width_multiplier, voxel_resolution_multiplier=voxel_resolution_multiplier, text_embedding_channels=10
         )
         self.sa_layers = nn.ModuleList(sa_layers)
 
@@ -226,7 +226,7 @@ class PVCNN2Base(nn.Module):
 
         temb =  self.embedf(self.get_timestep_embedding(t, inputs.device))[:,:,None].expand(-1,-1,inputs.shape[-1])
 
-        # inputs : [B, in_channels + S, N]
+        # inputs : [B, in_channels + S + T, N] where T are text embeddings (10)
         coords, features = inputs[:, :3, :].contiguous(), inputs
         coords_list, in_features_list = [], []
         for i, sa_blocks  in enumerate(self.sa_layers):
@@ -236,7 +236,7 @@ class PVCNN2Base(nn.Module):
                 features, coords, temb = sa_blocks ((features, coords, temb))
             else:
                 features, coords, temb = sa_blocks ((torch.cat([features,temb],dim=1), coords, temb))
-        in_features_list[0] = inputs[:, 3:, :].contiguous()
+        in_features_list[0] = inputs[:, 3+10:, :].contiguous()
         if self.global_att is not None:
             features = self.global_att(features)
         for fp_idx, fp_blocks  in enumerate(self.fp_layers):

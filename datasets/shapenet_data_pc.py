@@ -7,6 +7,8 @@ import random
 import open3d as o3d
 import numpy as np
 import torch.nn.functional as F
+import pandas as pd
+
 
 # taken from https://github.com/optas/latent_3d_points/blob/8e8f29f8124ed5fc59439e8551ba7ef7567c9a37/src/in_out.py
 synsetid_to_cate = {
@@ -59,6 +61,7 @@ class Uniform15KPC(Dataset):
         self.all_cate_mids = []
         self.cate_idx_lst = []
         self.all_points = []
+        self.all_descriptions = []
         for cate_idx, subd in enumerate(self.subdirs):
             # NOTE: [subd] here is synset id
             sub_path = os.path.join(root_dir, subd, self.split)
@@ -66,6 +69,8 @@ class Uniform15KPC(Dataset):
                 print("Directory missing : %s" % sub_path)
                 continue
 
+            description_path = os.path.join(root_dir, subd, self.split, "predictions.txt")
+            df = pd.read_csv(description_path, header=None, index_col=0, names=['Path', 'Category'])
             all_mids = []
             for x in os.listdir(sub_path):
                 if not x.endswith('.npy'):
@@ -76,6 +81,8 @@ class Uniform15KPC(Dataset):
             for mid in all_mids:
                 # obj_fname = os.path.join(sub_path, x)
                 obj_fname = os.path.join(root_dir, subd, mid + ".npy")
+                _, mid_without_split = mid.split("/")
+                description = int(df.loc[mid_without_split])
                 try:
                     point_cloud = np.load(obj_fname)  # (15k, 3)
 
@@ -86,6 +93,7 @@ class Uniform15KPC(Dataset):
                 self.all_points.append(point_cloud[np.newaxis, ...])
                 self.cate_idx_lst.append(cate_idx)
                 self.all_cate_mids.append((subd, mid))
+                self.all_descriptions.append(description)
 
         # Shuffle the index deterministically (based on the number of examples)
         self.shuffle_idx = list(range(len(self.all_points)))
@@ -93,6 +101,7 @@ class Uniform15KPC(Dataset):
         self.cate_idx_lst = [self.cate_idx_lst[i] for i in self.shuffle_idx]
         self.all_points = [self.all_points[i] for i in self.shuffle_idx]
         self.all_cate_mids = [self.all_cate_mids[i] for i in self.shuffle_idx]
+        self.all_descriptions = [self.all_descriptions[i] for i in self.shuffle_idx]
 
         # Normalization
         self.all_points = np.concatenate(self.all_points)  # (N, 15000, 3)
@@ -172,13 +181,15 @@ class Uniform15KPC(Dataset):
         m, s = self.get_pc_stats(idx)
         cate_idx = self.cate_idx_lst[idx]
         sid, mid = self.all_cate_mids[idx]
+        description = self.all_descriptions[idx]
 
         out = {
             'idx': idx,
             'train_points': tr_out,
             'test_points': te_out,
             'mean': m, 'std': s, 'cate_idx': cate_idx,
-            'sid': sid, 'mid': mid
+            'sid': sid, 'mid': mid,
+            'desc': description
         }
 
         if self.use_mask:

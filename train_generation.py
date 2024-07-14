@@ -2,6 +2,7 @@ import torch.multiprocessing as mp
 import torch.nn as nn
 import torch.optim as optim
 import torch.utils.data
+import torch.nn.functional as F
 
 import argparse
 from torch.distributions import Normal
@@ -263,7 +264,7 @@ class GaussianDiffusion:
         assert img_t.shape == shape
         return img_t
 
-    def p_sample_loop_trajectory(self, denoise_fn, shape, device, freq,
+    def p_sample_loop_trajectory(self, denoise_fn, shape, device, desc, freq,
                                  noise_fn=torch.randn,clip_denoised=True, keep_running=False):
         """
         Generate samples, returning intermediate images
@@ -389,11 +390,12 @@ class PVCNN2(PVCNN2Base):
     ]
 
     def __init__(self, num_classes, embed_dim, use_att,dropout, extra_feature_channels=3, width_multiplier=1,
-                 voxel_resolution_multiplier=1):
+                 voxel_resolution_multiplier=1, text_embedding_channels=0):
         super().__init__(
             num_classes=num_classes, embed_dim=embed_dim, use_att=use_att,
             dropout=dropout, extra_feature_channels=extra_feature_channels,
-            width_multiplier=width_multiplier, voxel_resolution_multiplier=voxel_resolution_multiplier
+            width_multiplier=width_multiplier, voxel_resolution_multiplier=voxel_resolution_multiplier,
+            text_embedding_channels=text_embedding_channels
         )
 
 
@@ -403,7 +405,7 @@ class Model(nn.Module):
         self.diffusion = GaussianDiffusion(betas, loss_type, model_mean_type, model_var_type)
 
         self.model = PVCNN2(num_classes=args.nc, embed_dim=args.embed_dim, use_att=args.attention,
-                            dropout=args.dropout, extra_feature_channels=0)
+                            dropout=args.dropout, extra_feature_channels=0, text_embedding_channels=10)
 
     def prior_kl(self, x0):
         return self.diffusion._prior_bpd(x0)
@@ -419,17 +421,21 @@ class Model(nn.Module):
         }
 
 
-    def _denoise(self, data, t):
+    def _denoise(self, data, t, desc):
         B, D,N= data.shape
         assert data.dtype == torch.float
         assert t.shape == torch.Size([B]) and t.dtype == torch.int64
+        assert desc.shape == torch.Size([B, 10])
+
+        desc = desc.unsqueeze(-1).repeat(1, 1, N)
+        data = torch.cat([data, desc], dim=1)
 
         out = self.model(data, t)
 
         assert out.shape == torch.Size([B, D, N])
         return out
 
-    def get_loss_iter(self, data, noises=None):
+    def get_loss_iter(self, data, desc, noises=None):
         B, D, N = data.shape
         t = torch.randint(0, self.diffusion.num_timesteps, size=(B,), device=data.device)
 
@@ -437,21 +443,22 @@ class Model(nn.Module):
             noises[t!=0] = torch.randn((t!=0).sum(), *noises.shape[1:]).to(noises)
 
         losses = self.diffusion.p_losses(
-            denoise_fn=self._denoise, data_start=data, t=t, noise=noises)
+            denoise_fn=lambda data, t: self._denoise(data, t, desc), data_start=data, t=t, noise=noises)
         assert losses.shape == t.shape == torch.Size([B])
         return losses
 
-    def gen_samples(self, shape, device, noise_fn=torch.randn,
+    def gen_samples(self, shape, device, desc, noise_fn=torch.randn,
                     clip_denoised=True,
                     keep_running=False):
-        return self.diffusion.p_sample_loop(self._denoise, shape=shape, device=device, noise_fn=noise_fn,
-                                            clip_denoised=clip_denoised,
-                                            keep_running=keep_running)
+        return self.diffusion.p_sample_loop(lambda data, t: self._denoise(data, t, desc), shape=shape, device=device,
+                                            noise_fn=noise_fn, clip_denoised=clip_denoised, keep_running=keep_running)
 
-    def gen_sample_traj(self, shape, device, freq, noise_fn=torch.randn,
+
+
+    def gen_sample_traj(self, shape, device, desc, freq, noise_fn=torch.randn,
                     clip_denoised=True,keep_running=False):
-        return self.diffusion.p_sample_loop_trajectory(self._denoise, shape=shape, device=device, noise_fn=noise_fn, freq=freq,
-                                                       clip_denoised=clip_denoised,
+        return self.diffusion.p_sample_loop_trajectory(lambda data, t: self._denoise(data, t, desc), shape=shape, device=device,
+                                                       noise_fn=noise_fn, freq=freq, clip_denoised=clip_denoised,
                                                        keep_running=keep_running)
 
     def train(self):
@@ -634,6 +641,9 @@ def train(gpu, opt, output_dir, noises_init):
 
         for i, data in enumerate(dataloader):
             x = data['train_points'].transpose(1,2)
+            desc_int = data['desc']
+            desc = F.one_hot(desc_int, num_classes=10)
+
             noises_batch = noises_init[data['idx']].transpose(1,2)
 
             '''
@@ -642,12 +652,14 @@ def train(gpu, opt, output_dir, noises_init):
 
             if opt.distribution_type == 'multi' or (opt.distribution_type is None and gpu is not None):
                 x = x.cuda(gpu)
+                desc = desc.cuda()
                 noises_batch = noises_batch.cuda(gpu)
             elif opt.distribution_type == 'single':
                 x = x.cuda()
+                desc = desc.cuda()
                 noises_batch = noises_batch.cuda()
 
-            loss = model.get_loss_iter(x, noises_batch).mean()
+            loss = model.get_loss_iter(x, desc, noises_batch).mean()
 
             optimizer.zero_grad()
             loss.backward()
@@ -695,8 +707,8 @@ def train(gpu, opt, output_dir, noises_init):
             model.eval()
             with torch.no_grad():
 
-                x_gen_eval = model.gen_samples(new_x_chain(x, 25).shape, x.device, clip_denoised=False)
-                x_gen_list = model.gen_sample_traj(new_x_chain(x, 1).shape, x.device, freq=40, clip_denoised=False)
+                x_gen_eval = model.gen_samples(new_x_chain(x, 25).shape, x.device, desc, clip_denoised=False)
+                x_gen_list = model.gen_sample_traj(new_x_chain(x, 1).shape, x.device, desc, freq=40, clip_denoised=False)
                 x_gen_all = torch.cat(x_gen_list, dim=0)
 
                 gen_stats = [x_gen_eval.mean(), x_gen_eval.std()]
