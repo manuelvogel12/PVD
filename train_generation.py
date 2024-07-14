@@ -410,8 +410,8 @@ class Model(nn.Module):
     def prior_kl(self, x0):
         return self.diffusion._prior_bpd(x0)
 
-    def all_kl(self, x0, clip_denoised=True):
-        total_bpd_b, vals_bt, prior_bpd_b, mse_bt =  self.diffusion.calc_bpd_loop(self._denoise, x0, clip_denoised)
+    def all_kl(self, x0, desc, clip_denoised=True):
+        total_bpd_b, vals_bt, prior_bpd_b, mse_bt =  self.diffusion.calc_bpd_loop(lambda data, t: self._denoise(data, t, desc), x0, clip_denoised)
 
         return {
             'total_bpd_b': total_bpd_b,
@@ -685,7 +685,12 @@ def train(gpu, opt, output_dir, noises_init):
             logger.info('Diagnosis:')
 
             x_range = [x.min().item(), x.max().item()]
-            kl_stats = model.all_kl(x)
+            
+            # Use SUV class as test
+            desc = torch.zeros([opt.bs,10]).cuda()
+            desc[:,1] = 1
+            
+            kl_stats = model.all_kl(x, desc)
             logger.info('      [{:>3d}/{:>3d}]    '
                          'x_range: [{:>10.4f}, {:>10.4f}],   '
                          'total_bpd_b: {:>10.4f},    '
@@ -706,6 +711,11 @@ def train(gpu, opt, output_dir, noises_init):
 
             model.eval()
             with torch.no_grad():
+                
+                
+                # Use SUV class as test
+                desc = torch.zeros([opt.bs,10]).cuda()
+                desc[:,1] = 1
 
                 x_gen_eval = model.gen_samples(new_x_chain(x, 25).shape, x.device, desc, clip_denoised=False)
                 x_gen_list = model.gen_sample_traj(new_x_chain(x, 1).shape, x.device, desc, freq=40, clip_denoised=False)
