@@ -264,7 +264,7 @@ class GaussianDiffusion:
         assert img_t.shape == shape
         return img_t
 
-    def p_sample_loop_trajectory(self, denoise_fn, shape, device, desc, freq,
+    def p_sample_loop_trajectory(self, denoise_fn, shape, device, freq,
                                  noise_fn=torch.randn,clip_denoised=True, keep_running=False):
         """
         Generate samples, returning intermediate images
@@ -716,8 +716,10 @@ def train(gpu, opt, output_dir, noises_init):
                 # Use SUV class as test
                 desc = torch.zeros([opt.bs,10]).cuda()
                 desc[:,1] = 1
+                desc_25 = torch.zeros([25,10]).cuda()
+                desc_25[:,1] = 1
 
-                x_gen_eval = model.gen_samples(new_x_chain(x, 25).shape, x.device, desc, clip_denoised=False)
+                x_gen_eval = model.gen_samples(new_x_chain(x, 25).shape, x.device, desc_25, clip_denoised=False)
                 x_gen_list = model.gen_sample_traj(new_x_chain(x, 1).shape, x.device, desc, freq=40, clip_denoised=False)
                 x_gen_all = torch.cat(x_gen_list, dim=0)
 
