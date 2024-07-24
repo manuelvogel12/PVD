@@ -264,7 +264,7 @@ class GaussianDiffusion:
         assert img_t.shape == shape
         return img_t
 
-    def p_sample_loop_trajectory(self, denoise_fn, shape, device, desc, freq,
+    def p_sample_loop_trajectory(self, denoise_fn, shape, device, freq,
                                  noise_fn=torch.randn,clip_denoised=True, keep_running=False):
         """
         Generate samples, returning intermediate images
@@ -619,7 +619,15 @@ def train(gpu, opt, output_dir, noises_init):
 
     if opt.model != '':
         ckpt = torch.load(opt.model)
-        model.load_state_dict(ckpt['model_state'])
+        model_state_dict = ckpt['model_state']
+        if opt.load_partial:
+            print("All keys", model_state_dict.keys())
+            keys_to_remove = [key for key in model_state_dict.keys() if 'sa_layers.0' in key]
+            print("Keys to remove:",keys_to_remove)
+            for key in keys_to_remove:
+                del model_state_dict[key]
+
+        model.load_state_dict(model_state_dict,strict=False)
         optimizer.load_state_dict(ckpt['optimizer_state'])
 
     if opt.model != '':
@@ -685,11 +693,9 @@ def train(gpu, opt, output_dir, noises_init):
             logger.info('Diagnosis:')
 
             x_range = [x.min().item(), x.max().item()]
-            
             # Use SUV class as test
             desc = torch.zeros([opt.bs,10]).cuda()
             desc[:,1] = 1
-            
             kl_stats = model.all_kl(x, desc)
             logger.info('      [{:>3d}/{:>3d}]    '
                          'x_range: [{:>10.4f}, {:>10.4f}],   '
@@ -714,11 +720,16 @@ def train(gpu, opt, output_dir, noises_init):
                 
                 
                 # Use SUV class as test
-                desc = torch.zeros([opt.bs,10]).cuda()
-                desc[:,1] = 1
+                desc_25 = torch.zeros([25,10]).cuda()
+                desc_25[:,1] = 1
+                desc_1 = torch.zeros([1,10]).cuda()
+                desc_1[:,1] = 1
+                #print("DESC",desc.shape)
+                #print("x", x.shape)
+                #print("chain", new_x_chain(x,25).shape)
 
-                x_gen_eval = model.gen_samples(new_x_chain(x, 25).shape, x.device, desc, clip_denoised=False)
-                x_gen_list = model.gen_sample_traj(new_x_chain(x, 1).shape, x.device, desc, freq=40, clip_denoised=False)
+                x_gen_eval = model.gen_samples(new_x_chain(x, 25).shape, x.device, desc_25, clip_denoised=False)
+                x_gen_list = model.gen_sample_traj(new_x_chain(x, 1).shape, x.device, desc_1, freq=40, clip_denoised=False)
                 x_gen_all = torch.cat(x_gen_list, dim=0)
 
                 gen_stats = [x_gen_eval.mean(), x_gen_eval.std()]
@@ -838,7 +849,7 @@ def parse_args():
     parser.add_argument('--lr_gamma', type=float, default=0.998, help='lr decay for EBM')
 
     parser.add_argument('--model', default='', help="path to model (to continue training)")
-
+    parser.add_argument('--load_partial', action='store_true', help="Load the model partially, excluding certain layers")
 
     '''distributed'''
     parser.add_argument('--world_size', default=1, type=int,
