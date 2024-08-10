@@ -8,6 +8,8 @@ import torch.utils.data
 
 import argparse
 from torch.distributions import Normal
+import torch.nn.functional as F
+
 
 from utils.file_utils import *
 from utils.visualize import *
@@ -191,6 +193,9 @@ class GaussianDiffusion:
         model_mean, _, model_log_variance, pred_xstart = self.p_mean_variance(denoise_fn, data=data, t=t, clip_denoised=clip_denoised,
                                                                  return_pred_xstart=True)
         noise = noise_fn(size=data.shape, dtype=data.dtype, device=data.device)
+        for i in range(1, noise.shape[0]):
+            print("WARNING: NOISE IS SAME FOR ALL")
+            noise[i] = noise[0]
         assert noise.shape == data.shape
         # no noise when t == 0
         nonzero_mask = torch.reshape(1 - (t == 0).float(), [data.shape[0]] + [1] * (len(data.shape) - 1))
@@ -217,13 +222,18 @@ class GaussianDiffusion:
 
         assert isinstance(shape, (tuple, list))
         img_t = noise_fn(size=shape, dtype=torch.float, device=device)
+        for i in range(1, img_t.shape[0]):
+            print("WARNING: NOISE IS SAME FOR ALL")
+            img_t[i] = img_t[0]
+       
+            
         for t in reversed(range(0, final_time if not keep_running else len(self.betas))):
             img_t = constrain_fn(img_t, t)
             t_ = torch.empty(shape[0], dtype=torch.int64, device=device).fill_(t)
             img_t = self.p_sample(denoise_fn=denoise_fn, data=img_t,t=t_, noise_fn=noise_fn,
                                   clip_denoised=clip_denoised, return_pred_xstart=False).detach()
 
-
+        
         assert img_t.shape == shape
         return img_t
 
@@ -261,11 +271,12 @@ class PVCNN2(PVCNN2Base):
     ]
 
     def __init__(self, num_classes, embed_dim, use_att,dropout, extra_feature_channels=3, width_multiplier=1,
-                 voxel_resolution_multiplier=1):
+                 voxel_resolution_multiplier=1,text_embedding_channels=0):
         super().__init__(
             num_classes=num_classes, embed_dim=embed_dim, use_att=use_att,
             dropout=dropout, extra_feature_channels=extra_feature_channels,
-            width_multiplier=width_multiplier, voxel_resolution_multiplier=voxel_resolution_multiplier
+            width_multiplier=width_multiplier, voxel_resolution_multiplier=voxel_resolution_multiplier,
+            text_embedding_channels=text_embedding_channels
         )
 
 
@@ -276,7 +287,7 @@ class Model(nn.Module):
         self.diffusion = GaussianDiffusion(betas, loss_type, model_mean_type, model_var_type)
 
         self.model = PVCNN2(num_classes=args.nc, embed_dim=args.embed_dim, use_att=args.attention,
-                            dropout=args.dropout, extra_feature_channels=0)
+                            dropout=args.dropout, extra_feature_channels=0,text_embedding_channels=10)
 
     def prior_kl(self, x0):
         return self.diffusion._prior_bpd(x0)
@@ -293,11 +304,39 @@ class Model(nn.Module):
 
 
     def _denoise(self, data, t):
-        B, D,N= data.shape
+        B, D, N = data.shape
         assert data.dtype == torch.float
         assert t.shape == torch.Size([B]) and t.dtype == torch.int64
+        
+        # interpolation between sport_car and minivan
+        sport_car_tensor = torch.tensor([0, 0, 0, 0, 0, 0, 0, 0, 1, 0], dtype=torch.float32)
+        minivan_tensor   = torch.tensor([0, 0, 0, 0, 0, 0, 1, 0, 0, 0], dtype=torch.float32)
 
-        out = self.model(data, t)
+
+        interpolation = True
+        if interpolation:
+            # Generate interpolated tensors
+            tensors = []
+            for i in range(B):
+                alpha = i / (B - 1)  # Calculate interpolation factor
+                interpolated_tensor = (1 - alpha) * sport_car_tensor + alpha * minivan_tensor
+                tensors.append(interpolated_tensor)
+
+            # Convert the list of tensors to a PyTorch tensor (optional)
+            desc = torch.stack(tensors).unsqueeze(2).repeat(1, 1, N) # shape (B,10,2024)
+        else:
+            # otherwise have 5 items of each type
+            if B == 50:
+                desc_int = torch.arange(10).repeat_interleave(5).cuda()
+            else:
+                desc_int = torch.zeros(B, dtype=torch.int64).cuda()
+
+            num_classes = 10
+            desc = F.one_hot(desc_int, num_classes=num_classes)
+            desc = desc.unsqueeze(-1).repeat(1, 1, N)  # shape (B,10,2024)
+        # data = torch.cat([data, desc], dim=1)
+        
+        out = self.model(data, t, desc)
 
         assert out.shape == torch.Size([B, D, N])
         return out
@@ -452,26 +491,28 @@ def generate(model, opt):
         ref = []
 
         for i, data in tqdm(enumerate(test_dataloader), total=len(test_dataloader), desc='Generating Samples'):
+            
+            if i == 0:
+                x = data['test_points'].transpose(1,2)
+                m, s = data['mean'].float(), data['std'].float()
 
-            x = data['test_points'].transpose(1,2)
-            m, s = data['mean'].float(), data['std'].float()
+                gen = model.gen_samples(x.shape,
+                                           'cuda', clip_denoised=False).detach().cpu()
 
-            gen = model.gen_samples(x.shape,
-                                       'cuda', clip_denoised=False).detach().cpu()
-
-            gen = gen.transpose(1,2).contiguous()
-            x = x.transpose(1,2).contiguous()
+                gen = gen.transpose(1,2).contiguous()
+                x = x.transpose(1,2).contiguous()
 
 
 
-            gen = gen * s + m
-            x = x * s + m
-            samples.append(gen)
-            ref.append(x)
+                gen = gen * s + m
+                x = x * s + m
+                samples.append(gen)
+                ref.append(x)
 
-            visualize_pointcloud_batch(os.path.join(str(Path(opt.eval_path).parent), 'x.png'), gen[:64], None,
-                                       None, None)
-
+                visualize_pointcloud_batch(os.path.join(str(Path(opt.eval_path).parent), 'x.png'), gen[:64], None,
+                                           None, None)
+        print("len", len(samples))
+        print("SHAPE", samples[0].shape)
         samples = torch.cat(samples, dim=0)
         ref = torch.cat(ref, dim=0)
 

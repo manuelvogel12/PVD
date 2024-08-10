@@ -5,6 +5,8 @@ import torch.utils.data
 import torch.nn.functional as F
 
 import argparse
+import re
+
 from torch.distributions import Normal
 
 from utils.file_utils import *
@@ -428,9 +430,9 @@ class Model(nn.Module):
         assert desc.shape == torch.Size([B, 10])
 
         desc = desc.unsqueeze(-1).repeat(1, 1, N)
-        data = torch.cat([data, desc], dim=1)
+        # data = torch.cat([data, desc], dim=1)
 
-        out = self.model(data, t)
+        out = self.model(data, t, desc)
 
         assert out.shape == torch.Size([B, D, N])
         return out
@@ -548,6 +550,14 @@ def get_dataloader(opt, train_dataset, test_dataset=None):
     return train_dataloader, test_dataloader, train_sampler, test_sampler
 
 
+def check_layername(key):
+    pattern1 = re.compile(r'sa_layers\.\d+\.0\.[a-zA-Z_\.]+\.0')
+    pattern2 = re.compile(r'fp_layers\.\d+\.0\.mlp\.layers\.0')
+    pattern3 = re.compile(r'sa_layers\.3\.mlps\.0\.layers\.0')
+    
+    return bool(pattern1.search(key) or pattern2.search(key) or pattern3.search(key))
+
+
 def train(gpu, opt, output_dir, noises_init):
 
     set_seed(opt)
@@ -621,19 +631,19 @@ def train(gpu, opt, output_dir, noises_init):
         ckpt = torch.load(opt.model)
         model_state_dict = ckpt['model_state']
         if opt.load_partial:
-            print("All keys", model_state_dict.keys())
-            keys_to_remove = [key for key in model_state_dict.keys() if 'sa_layers.0' in key]
-            print("Keys to remove:",keys_to_remove)
+            keys_to_remove = [key for key in model_state_dict.keys() if check_layername(key)]
+            # print("Keys to remove:",keys_to_remove)
             for key in keys_to_remove:
                 del model_state_dict[key]
-
+        #print("Keys remaining:",model_state_dict.items())
         model.load_state_dict(model_state_dict,strict=False)
-        optimizer.load_state_dict(ckpt['optimizer_state'])
+        if not opt.load_partial:
+            optimizer.load_state_dict(ckpt['optimizer_state'])
 
-    if opt.model != '':
-        start_epoch = torch.load(opt.model)['epoch'] + 1
-    else:
-        start_epoch = 0
+    #if opt.model != '':
+    #    start_epoch = torch.load(opt.model)['epoch'] + 1
+    #else:
+    start_epoch = 0
 
     def new_x_chain(x, num_chain):
         return torch.randn(num_chain, *x.shape[1:], device=x.device)
