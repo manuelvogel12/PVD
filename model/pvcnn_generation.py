@@ -243,10 +243,11 @@ class PVCNN2Base(nn.Module):
 
         temb =  self.embedf(self.get_timestep_embedding(t, inputs.device))[:,:,None].expand(-1,-1,inputs.shape[-1])
 
+        text_emb_dim = text_emb.shape[1]
         
         time_and_text_emb = torch.cat([temb, text_emb], dim=1)
 
-        # inputs : [B, in_channels + S + T, N] where T are text embeddings (10)
+        # inputs : [B, in_channels + S + T, N] where T are text embeddings (e.g. shape 10)
         coords, features = inputs[:, :3, :].contiguous(), inputs
         #print("features", features.shape)
         coords_list, in_features_list = [], []
@@ -258,7 +259,7 @@ class PVCNN2Base(nn.Module):
                 features, coords, time_and_text_emb = sa_blocks ((features, coords, time_and_text_emb))
             else:
                 features, coords, time_and_text_emb = sa_blocks ((torch.cat([features,time_and_text_emb],dim=1), coords, time_and_text_emb))
-        in_features_list[0] = inputs[:, 3+10:, :].contiguous()
+        in_features_list[0] = inputs[:, 3+text_emb_dim:, :].contiguous()
         if self.global_att is not None:
             features = self.global_att(features)
         for fp_idx, fp_blocks  in enumerate(self.fp_layers):

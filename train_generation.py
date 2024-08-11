@@ -13,7 +13,8 @@ from utils.file_utils import *
 from utils.visualize import *
 from model.pvcnn_generation import PVCNN2Base
 import torch.distributed as dist
-from datasets.shapenet_data_pc import ShapeNet15kPointClouds
+#from datasets.shapenet_data_pc import ShapeNet15kPointClouds
+from datasets.objaverse_data_pc import Objaverse15kPointClouds
 
 '''
 some utils
@@ -407,8 +408,8 @@ class Model(nn.Module):
         self.diffusion = GaussianDiffusion(betas, loss_type, model_mean_type, model_var_type)
 
         self.model = PVCNN2(num_classes=args.nc, embed_dim=args.embed_dim, use_att=args.attention,
-                            dropout=args.dropout, extra_feature_channels=0, text_embedding_channels=10)
-
+                            dropout=args.dropout, extra_feature_channels=0, text_embedding_channels=args.text_emb_dim)
+        self.args = args
     def prior_kl(self, x0):
         return self.diffusion._prior_bpd(x0)
 
@@ -427,7 +428,7 @@ class Model(nn.Module):
         B, D,N= data.shape
         assert data.dtype == torch.float
         assert t.shape == torch.Size([B]) and t.dtype == torch.int64
-        assert desc.shape == torch.Size([B, 10])
+        assert desc.shape == torch.Size([B, self.args.text_emb_dim])
 
         desc = desc.unsqueeze(-1).repeat(1, 1, N)
         # data = torch.cat([data, desc], dim=1)
@@ -497,7 +498,7 @@ def get_betas(schedule_type, b_start, b_end, time_num):
 
 
 def get_dataset(dataroot, npoints,category):
-    tr_dataset = ShapeNet15kPointClouds(root_dir=dataroot,
+    tr_dataset = Objaverse15kPointClouds(root_dir=dataroot,
         categories=[category], split='train',
         tr_sample_size=npoints,
         te_sample_size=npoints,
@@ -505,7 +506,7 @@ def get_dataset(dataroot, npoints,category):
         normalize_per_shape=False,
         normalize_std_per_axis=False,
         random_subsample=True)
-    te_dataset = ShapeNet15kPointClouds(root_dir=dataroot,
+    te_dataset = Objaverse15kPointClouds(root_dir=dataroot,
         categories=[category], split='val',
         tr_sample_size=npoints,
         te_sample_size=npoints,
@@ -659,8 +660,12 @@ def train(gpu, opt, output_dir, noises_init):
 
         for i, data in enumerate(dataloader):
             x = data['train_points'].transpose(1,2)
-            desc_int = data['desc']
-            desc = F.one_hot(desc_int, num_classes=10)
+            SIMPLE_EMB = False
+            if SIMPLE_EMB:
+                desc_int = data['desc']
+                desc = F.one_hot(desc_int, num_classes=opt.text_emb_dim)
+            else:
+                desc = data['desc']
 
             noises_batch = noises_init[data['idx']].transpose(1,2)
 
@@ -704,7 +709,7 @@ def train(gpu, opt, output_dir, noises_init):
 
             x_range = [x.min().item(), x.max().item()]
             # Use SUV class as test
-            desc = torch.zeros([opt.bs,10]).cuda()
+            desc = torch.zeros([opt.bs,opt.text_emb_dim]).cuda()
             desc[:,1] = 1
             kl_stats = model.all_kl(x, desc)
             logger.info('      [{:>3d}/{:>3d}]    '
@@ -730,9 +735,9 @@ def train(gpu, opt, output_dir, noises_init):
                 
                 
                 # Use SUV class as test
-                desc_25 = torch.zeros([25,10]).cuda()
+                desc_25 = torch.zeros([25,opt.text_emb_dim]).cuda()
                 desc_25[:,1] = 1
-                desc_1 = torch.zeros([1,10]).cuda()
+                desc_1 = torch.zeros([1,opt.text_emb_dim]).cuda()
                 desc_1[:,1] = 1
                 #print("DESC",desc.shape)
                 #print("x", x.shape)
@@ -829,7 +834,7 @@ def main():
 def parse_args():
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataroot', default='ShapeNetCore.v2.PC15k/')
+    parser.add_argument('--dataroot', default='ObjaversePC15k/')
     parser.add_argument('--category', default='chair')
 
     parser.add_argument('--bs', type=int, default=16, help='input batch size')
@@ -885,7 +890,8 @@ def parse_args():
     parser.add_argument('--print_freq', default=50, help='unit: iter')
 
     parser.add_argument('--manualSeed', default=42, type=int, help='random seed')
-
+    
+    parser.add_argument('--text_emb_dim', default=768, type=int, help='number of text_embedding dimensions')
 
     opt = parser.parse_args()
 
