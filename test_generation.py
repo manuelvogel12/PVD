@@ -368,11 +368,12 @@ class Model(nn.Module):
                 desc = desc.unsqueeze(-1).repeat(1, 1, N)  # shape (B,10,2024)
         else:
             # complex embeddings
-            text_guidance = [ "SUV mercedesbenz big new luxury",
-                              "sportcar porsche 911 fast new",
+            text_guidance = [ "coupe audi a4 coupe",
+                              "sportscar porsche 911 carrera turbo",
                               "pickuptruck tesla cybertruck future big",
-                              "minivan vw old camper van",
-                              "caprio mini couper red british"]
+                              "sportscar ferrari testarossa",
+                              "convertible mini red british"]
+                              
             emb = self.text_to_embeddings(text_guidance).repeat(10, 1) # make a 50x1024 tensor
             #emb = torch.stack(emb_list)
             emb = emb.unsqueeze(2).repeat(1, 1, N) # shape (50,10,2024)
@@ -537,25 +538,25 @@ def generate(model, opt):
 
         for i, data in tqdm(enumerate(test_dataloader), total=len(test_dataloader), desc='Generating Samples'):
             
-            #if i == 0:
-            x = data['test_points'].transpose(1,2)
-            m, s = data['mean'].float(), data['std'].float()
+            if i == 0:
+                x = data['test_points'].transpose(1,2)
+                m, s = data['mean'].float(), data['std'].float()
 
-            gen = model.gen_samples(x.shape,
-                                       'cuda', clip_denoised=False).detach().cpu()
+                gen = model.gen_samples(x.shape,
+                                           'cuda', clip_denoised=False).detach().cpu()
 
-            gen = gen.transpose(1,2).contiguous()
-            x = x.transpose(1,2).contiguous()
+                gen = gen.transpose(1,2).contiguous()
+                x = x.transpose(1,2).contiguous()
 
 
 
-            gen = gen * s + m
-            x = x * s + m
-            samples.append(gen)
-            ref.append(x)
+                gen = gen * s + m
+                x = x * s + m
+                samples.append(gen)
+                ref.append(x)
 
-            visualize_pointcloud_batch(os.path.join(str(Path(opt.eval_path).parent), 'x.png'), gen[:64], None,
-                                       None, None)
+                visualize_pointcloud_batch(os.path.join(str(Path(opt.eval_path).parent), 'x.png'), gen[:64], None,
+                                           None, None)
         print("len", len(samples))
         print("SHAPE", samples[0].shape)
         samples = torch.cat(samples, dim=0)

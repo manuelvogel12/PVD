@@ -641,10 +641,10 @@ def train(gpu, opt, output_dir, noises_init):
         if not opt.load_partial:
             optimizer.load_state_dict(ckpt['optimizer_state'])
 
-    #if opt.model != '':
-    #    start_epoch = torch.load(opt.model)['epoch'] + 1
-    #else:
-    start_epoch = 0
+    if opt.model != '' and not opt.load_partial:
+        start_epoch = torch.load(opt.model)['epoch'] + 1
+    else:
+        start_epoch = 0
 
     def new_x_chain(x, num_chain):
         return torch.randn(num_chain, *x.shape[1:], device=x.device)
@@ -884,7 +884,7 @@ def parse_args():
                         help='GPU id to use. None means using all available GPUs.')
 
     '''eval'''
-    parser.add_argument('--saveIter', default=100, help='unit: epoch')
+    parser.add_argument('--saveIter', default=50, help='unit: epoch')
     parser.add_argument('--diagIter', default=50, help='unit: epoch')
     parser.add_argument('--vizIter', default=50, help='unit: epoch')
     parser.add_argument('--print_freq', default=50, help='unit: iter')
